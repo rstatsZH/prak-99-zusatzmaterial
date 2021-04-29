@@ -1,0 +1,171 @@
+---
+title: "Zusatzmaterial"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# dplyr::across() - Zusatzmaterial
+
+Die Funktion `across()` besonders nützlich im Zusammenhang mit `summarise()`. Sie wird genutzt um zusammengefasste Dataframes für mehrere Variablen mittels einer Helfer Funktion zu erstellen.
+
+```{r dplyr-across}
+
+penguins %>% 
+  summarise(across(ends_with("mm"), mean, na.rm = TRUE))
+
+```
+
+Andere Helfer Funktionen:
+
+- `starts_with()`
+- `contains()`
+
+```{r dplyr-across}
+
+penguins %>% 
+  group_by(species) %>% 
+  summarise(across(.cols = contains("mm"),
+                   list(avg = mean),
+                   na.rm = TRUE,
+                   .names = "{.fn}_{.col}"))
+
+penguins %>%
+  group_by(species) %>% 
+  summarise(across(.cols = contains("mm"),
+                   .fns = ~mean(.x, na.rm = TRUE), # Ein Weg die Funktion zu schreiben
+                   .names = "mean_{.col}")) # Ein Namenskürzel für alle neuen Spalten
+
+penguins %>% 
+  group_by(species) %>% 
+  summarise(across(.cols = starts_with("bill"),
+                   .fns = max, # Ein weiterer Weg. na.rm = TRUE ist hier ausserhalb
+                   na.rm = TRUE,
+                   .names = "max_{.col}"))  # Ein Namenskürzel für alle neuen Spalten
+
+penguins %>%
+  group_by(species) %>%
+  summarize(across(contains("length"),
+                  .fns = list(avg = mean, sd = sd), # Eine Liste mit Funktionen und zugehörigen Namen
+                   na.rm = TRUE,
+                   .names = "{.fn}_{.col}"))
+
+```
+
+```{r dplyr-if-any-na}
+
+# behalte nur Beobachtungen bei welcher in keiner Spalte NA enthalten ist
+penguins %>% 
+  drop_na()
+
+# behalte nur Boabachtungen bei welchen in mindestens einer Spalte NA auftaucht 
+penguins %>% 
+  filter(if_any(.cols = everything(), .fns = is.na))
+
+```
+
+Mehr zu `across()`:
+
+- https://dplyr.tidyverse.org/reference/across.html
+- https://www.tidyverse.org/blog/2020/04/dplyr-1-0-0-colwise/
+
+# Geodaten und Joins
+
+# Daten
+
+1. Steuerb. Einkommen natürl. Pers. Median [Fr.] 
+  - [Link zu Ressource](https://opendata.swiss/de/dataset/steuerb-einkommen-naturl-pers-median-fr/resource/6a5676db-d081-4574-a574-923ab93b9227)
+2. Nettoaufwand Bildung [Fr./Einw]
+  - [Link zu Ressource](https://opendata.swiss/de/dataset/nettoaufwand-bildung-fr-einw/resource/384b4376-e071-4bc8-abd9-97d7910202f7)
+3. Geodaten Kanton Zürich. Basiskarte Gemeindegrenzen. 
+  - [Link zu GIS-Browser Datenbezug](https://maps.zh.ch/?showtab=ogddownload)
+    - (1) Gebiet auswählen: Ganzer Kanton Zürich
+    - (2) Lieferadresse (E-Mail) eingeben: email@mail.com
+    - (3) Format festlegen, Produkt bestellen: 
+        - Produkt 95 (Gemeindegrenzen)
+        - Format wählen: ESRI Shapefile (.shp)
+        - Klick Bestellen Icon (Papierflieger)
+    - (4) Status der Bestellung
+        - Warten bis Daten heruntergeladen werden können
+        - Daten im RStudio Project Ordner speichern
+  - Mehr Info zu Geodaten: https://www.zh.ch/de/planen-bauen/geoinformation/geodaten.html
+
+# Daten importieren
+
+## Steuerbares Einkommen natürliche Pers. [Mio.Fr.] 
+
+```{r}
+
+steuer <- read_delim("https://www.web.statistik.zh.ch/ogd/data/KANTON_ZUERICH_316.csv", delim = ";") %>% 
+  rename_with(tolower)
+
+steuer %>% 
+  # Das letzte Jahr mit Daten
+  filter(indikator_jahr == max(indikator_jahr)) %>% 
+  
+  # Wieviele Gemeinden hat der Kanton Zürich? 
+  count(bfs_nr) 
+
+steuer2017 <- steuer %>% 
+  # Das letzte Jahr mit Daten
+  filter(indikator_jahr == max(indikator_jahr)) %>% 
+  
+  filter(!bfs_nr == 0) %>% 
+  select(bfs_nr, indikator_name, indikator_value)
+
+```
+
+## Nettoaufwand Bildung
+
+```{r}
+
+aufwand_bildung <- read_delim("https://www.web.statistik.zh.ch/ogd/data/KANTON_ZUERICH_421.csv", delim = ";") %>% 
+  rename_with(tolower)
+
+aufwand_bildung2017 <- aufwand_bildung %>% 
+  filter(indikator_jahr == 2017) %>% 
+  filter(bfs_nr != 0)  %>% 
+  select(bfs_nr, indikator_name, indikator_value)
+
+```
+
+## Daten zusammenfügen
+
+```{r}
+
+daten_zusm <- aufwand_bildung2017 %>%
+  full_join(steuer2017) %>% 
+  pivot_wider(names_from = "indikator_name", values_from = "indikator_value") %>% 
+  janitor::clean_names()
+
+daten_zusm %>% 
+  ggplot(aes(x = nettoaufwand_bildung_fr_einw, y = steuerb_einkommen_naturl_pers_median_fr)) +
+  geom_point() 
+
+```
+
+## Geodaten importieren
+
+```{r}
+
+library(sf)
+
+geo_gemeinden <- st_read(here::here("demonstration/demo-03-joins/data/5886269ff7e5447b817864a7543dfc51/Gemeindegrenzen/UP_GEMEINDEN_SEEN_F.shp"))
+
+geo_gemeinden %>% 
+  ggplot() +
+  geom_sf()
+
+daten_geo <- geo_gemeinden %>% 
+  left_join(daten_zusm, by = c("BFS" = "bfs_nr")) 
+
+ggplot(daten_geo, aes(fill = steuerb_einkommen_naturl_pers_median_fr)) +
+  geom_sf() 
+
+ggplot(daten_geo, aes(fill = nettoaufwand_bildung_fr_einw)) +
+  geom_sf()
+
+
+```
